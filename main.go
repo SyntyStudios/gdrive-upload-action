@@ -12,8 +12,10 @@ import (
 	"strings"
 
 	"github.com/sethvargo/go-githubactions"
+	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/drive/v3"
+	"google.golang.org/api/option"
 )
 
 const (
@@ -22,6 +24,7 @@ const (
 	nameInput        = "name"
 	folderIdInput    = "folderId"
 	credentialsInput = "credentials"
+	accessTokenInput = "accessToken"
 	encodedInput     = "encoded"
 	overwrite        = "overwrite"
 )
@@ -45,53 +48,21 @@ func main() {
 
 	// get base64 encoded credentials argument from action input
 	credentialsStr := githubactions.GetInput(credentialsInput)
-	if credentialsStr == "" {
-		missingInput(credentialsInput)
-	}
 	// add base64 encoded credentials argument to mask
 	githubactions.AddMask(credentialsStr)
 
-	// get encoded boolean input
-	var encoded bool
-	encodedStr := githubactions.GetInput(encodedInput)
-	if encodedStr == "" || encodedStr == "true" {
-		encoded = true
-	} else if encodedStr == "false" {
-		encoded = false
+	// get accessToken argument from action input
+	accessToken := githubactions.GetInput(accessTokenInput)
+	// add accessToken argument to mask
+	githubactions.AddMask(accessToken)
+
+	var svc *drive.Service
+	if credentialsStr != "" {
+		svc = authCredFile(credentialsStr)
+	} else if accessToken != "" {
+		svc = authWorkloadIdFed(accessToken)
 	} else {
-		incorrectInput(encodedInput, "encoded needs to be either empty, `false` or `true`.")
-	}
-
-	// decode if encoded is true
-	var credentials string
-	if encoded {
-		// decode credentials to []byte
-		credentialsByte, err := base64.StdEncoding.DecodeString(credentialsStr)
-		if err != nil {
-			githubactions.Fatalf(fmt.Sprintf("base64 decoding of 'credentials' failed with error: %v", err))
-		}
-
-		credentials = string(credentialsByte)
-	} else {
-		credentials = credentialsStr
-	}
-
-	creds := strings.TrimSuffix(string(credentials), "\n")
-
-	// add decoded credentials argument to mask
-	githubactions.AddMask(creds)
-
-	// fetching a JWT config with credentials and the right scope
-	conf, err := google.JWTConfigFromJSON([]byte(creds), scope)
-	if err != nil {
-		githubactions.Fatalf(fmt.Sprintf("fetching JWT credentials failed with error: %v", err))
-	}
-
-	// instantiating a new drive service
-	ctx := context.Background()
-	svc, err := drive.New(conf.Client(ctx))
-	if err != nil {
-		log.Println(err)
+		missingInput(fmt.Sprintf("%s or %s", credentialsInput, accessTokenInput))
 	}
 
 	file, err := os.Open(filename)
@@ -163,6 +134,71 @@ func main() {
 		}
 		setOutputEnv("download-link", fileMeta.WebContentLink)
 	}
+}
+
+func authCredFile(credentialsStr string) *drive.Service {
+
+	// get encoded boolean input
+	var encoded bool
+	encodedStr := githubactions.GetInput(encodedInput)
+	if encodedStr == "" || encodedStr == "true" {
+		encoded = true
+	} else if encodedStr == "false" {
+		encoded = false
+	} else {
+		incorrectInput(encodedInput, "encoded needs to be either empty, `false` or `true`.")
+	}
+
+	// decode if encoded is true
+	var credentials string
+	if encoded {
+		// decode credentials to []byte
+		credentialsByte, err := base64.StdEncoding.DecodeString(credentialsStr)
+		if err != nil {
+			githubactions.Fatalf(fmt.Sprintf("base64 decoding of 'credentials' failed with error: %v", err))
+		}
+
+		credentials = string(credentialsByte)
+	} else {
+		credentials = credentialsStr
+	}
+
+	creds := strings.TrimSuffix(string(credentials), "\n")
+
+	// add decoded credentials argument to mask
+	githubactions.AddMask(creds)
+
+	// fetching a JWT config with credentials and the right scope
+	conf, err := google.JWTConfigFromJSON([]byte(creds), scope)
+	if err != nil {
+		githubactions.Fatalf(fmt.Sprintf("fetching JWT credentials failed with error: %v", err))
+	}
+
+	// instantiating a new drive service
+	ctx := context.Background()
+	svc, err := drive.New(conf.Client(ctx))
+	if err != nil {
+		githubactions.Fatalf("Failed to create drive service: %v", err)
+	}
+
+	return svc
+}
+
+func authWorkloadIdFed(accessToken string) *drive.Service {
+
+	// Create a token source using the access token
+	tokenSource := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: accessToken})
+
+	// Create a new HTTP client with the token source
+	httpClient := oauth2.NewClient(context.Background(), tokenSource)
+
+	// Create a Drive service object using the HTTP client
+	driveService, err := drive.NewService(context.Background(), option.WithHTTPClient(httpClient))
+	if err != nil {
+		githubactions.Fatalf("Failed to create drive service: %v", err)
+	}
+
+	return driveService
 }
 
 func missingInput(inputName string) {

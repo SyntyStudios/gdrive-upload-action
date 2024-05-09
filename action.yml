@@ -13,7 +13,10 @@ inputs:
     required: true
   credentials:
     description: 'the service account credentials. Can be base64 encoded.'
-    required: true
+    required: false
+  accessToken:
+    description: 'the accessToken received when using Workload Identity Federation.'
+    required: false
   encoded:
     description: 'true if the credentials are base64 encoded. false if they are not.'
     required: false
